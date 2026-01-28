@@ -3,6 +3,8 @@
 
 <img align="right" src="/imgs/genlit_logo.png">
 
+*Disclaimer: Logo generated through ChatGPT Image Generator 1*
+
 A Python tool for extracting, validating, and cross-checking disease-associated genes and variants from biomedical literature (PubMed/PMC) and ClinVar databases using Natural Language Processing with Named Entity Recognition (NER), with optional AI-powered cross-validation through the Perplexity API.
 
 ---
@@ -82,7 +84,7 @@ Designed for bioinformaticians, researchers, and computational biologists conduc
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/dfupa/GenLit.git
+git clone https://github.com/dfupa/Genlit.git
 cd GenLit
 ```
 
@@ -528,7 +530,7 @@ If you use GenLit in your research, please cite:
   author = {Fuentes Palacios, Diego},
   title = {GenLit: Biomedical Literature Mining and Gene-Variant Curation},
   year = {2026},
-  url = {https://github.com/yourusername/GenLit}
+  url = {https://github.com/dfupa/Genlit}
 }
 ```
 
@@ -552,7 +554,7 @@ This project is licensed under the  GNU General Public License V3 - see LICENSE 
 ## Acknowledgments
 
 - **Flair** team for HunFlair2 biomedical NER model
-- **NCBI** for PubMed/PMC API
+- **NCBI** for PubMed/PMC Entrez API
 - **ClinVar** for variant pathogenicity data
 - **Perplexity AI** for reasoning API
 - **SciSpacy** for scientific NLP tools
@@ -574,7 +576,7 @@ Contributions are welcome! Please:
 ## Support
 
 For issues, questions, or feature requests:
-- Open an [GitHub Issue](https://github.com/yourusername/GenLit/issues)
+- Open an [GitHub Issue](https://github.com/yourusername/Genlit/issues)
 - Email: diegofupa@gmail.com
 
 ---
