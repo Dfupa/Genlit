@@ -103,7 +103,10 @@ Alternatively, create a fresh environment with core dependencies:
 conda create -n genelit python=3.10 -y
 conda activate genelit
 conda install -c bioconda -c conda-forge biopython flair scispacy pandas -y
-pip install python-dotenv perplexityai
+pip install python-dotenv perplexityai flair
+#Download directly the SciSpacy English models 
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+
 ```
 
 ### Step 3: Install Biomedical Models
