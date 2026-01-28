@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-# Author: Diego Fuentes
-# Contact email: diegofupa@gmail.com
-# Barcelona
-# Date:2025-11-27
+"""
+Author: Diego Fuentes
+Contact email: diegofupa@gmail.com
+Barcelona
+Date:2025-11-27
+
+Module for fetching ClinVar data from NCBI Entrez.
+Can be used to search ClinVar, fetch summary metadata and full XML records.
+Can be executed as is to demonstrate functionality.
+"""
 
 from Bio import Entrez
 from xml.etree import ElementTree as ET
@@ -14,7 +20,9 @@ import pandas as pd
 # -------------------------
 
 
-def configure_entrez(email, api_key=None, tool="gene_textminer"):
+def configure_entrez(
+    email: str, api_key: str = None, tool: str = "gene_textminer"
+) -> None:
     """
     Configure Entrez globally. Must be called once.
     Select the desired tool.
@@ -32,7 +40,7 @@ def configure_entrez(email, api_key=None, tool="gene_textminer"):
 # --------------------------------------
 
 
-def clinvar_search(query, retmax=200):
+def clinvar_search(query: str, retmax: int = 200) -> list[str]:
     """
     Search ClinVar using Entrez.esearch. Retrival by default set to 200.
     Query can be: gene symbol, rsID, HGVS string, condition, etc.
@@ -50,7 +58,7 @@ def clinvar_search(query, retmax=200):
 # --------------------------------------
 
 
-def clinvar_summaries(ids):
+def clinvar_summaries(ids: list[str]) -> list[dict]:
     """
     Fetch ClinVar summary records (JSON-like dictionary).
     Summaries provide clinical significance, gene names, variants, etc.
@@ -71,7 +79,7 @@ def clinvar_summaries(ids):
 # --------------------------------------
 
 
-def clinvar_fetch_full(ids):
+def clinvar_fetch_full(ids: list[str]) -> ET.Element | None:
     """
     Fetch full XML ClinVar records.
     Useful for detailed parsing: submissions, alleles, review status, etc.
@@ -93,13 +101,14 @@ def clinvar_fetch_full(ids):
 # --------------------------------------
 
 
-def parse_clinvar_summary(summary):
+def parse_clinvar_summary(summary: dict) -> dict:
     """
     Convert a raw ClinVar DictElement into a clean Python dict
     with all relevant fields extracted.
     """
 
-    def get(obj, key, default=None):
+    # Helper functions to safely get values and normalize lists
+    def get(obj: dict, key: str, default=None) -> any:
         try:
             if hasattr(obj, "get"):
                 return obj.get(key, default)
@@ -107,7 +116,7 @@ def parse_clinvar_summary(summary):
             pass
         return default
 
-    def norm_list(x):
+    def norm_list(x: any) -> list:
         if x is None:
             return []
         return list(x) if isinstance(x, (list, tuple)) else [x]
@@ -189,7 +198,7 @@ def parse_clinvar_summary(summary):
         ],
     }
 
-    # --- Oncogenicity & Impact (rarely used but included) ---
+    # --- Oncogenicity & Impact ---
     clean["oncogenicity"] = get(summary, "oncogenicity_classification")
     clean["clinical_impact"] = get(summary, "clinical_impact_classification")
 
@@ -201,20 +210,21 @@ def parse_clinvar_summary(summary):
     return clean
 
 
-def flatten_clinvar_summary(clean):
+def flatten_clinvar_summary(clean: dict) -> pd.DataFrame:
     """
     Flatten one parsed ClinVar summary (a dict) into
     a single-row pandas DataFrame.
     """
 
-    def join_list(x):
+    # --- Helper to join lists into strings ---
+    def join_list(x: any) -> str | None:
         if not x:
             return None
         if isinstance(x, list):
             return ", ".join(str(i) for i in x)
         return str(x)
 
-    # --- Coordinate extraction ---
+    # --- Coordinates extraction ---
     coords38 = next(
         (c for c in clean.get("coordinates", []) if c.get("assembly") == "GRCh38"), {}
     )
@@ -284,11 +294,13 @@ def flatten_clinvar_summary(clean):
 
 
 # --------------------------------------
-# Composite: Search → Summary → Parsed
+# Search → Summary → Parsed results
 # --------------------------------------
 
 
-def search_and_fetch_clinvar(query, retmax=50, parse=True):
+def search_and_fetch_clinvar(
+    query: str, retmax: int = 50, parse: bool = True
+) -> list[dict] | list[pd.DataFrame]:
     """
     Convenience wrapper:
       - search ClinVar
@@ -312,7 +324,7 @@ def search_and_fetch_clinvar(query, retmax=50, parse=True):
 # --------------------------------------
 
 if __name__ == "__main__":
-    configure_entrez(email="diegofupa@gmail.com")
+    configure_entrez(email="exampleemail@gmail.com")
 
     # example: variants associated to Hidradenitis Suppurativa
     results = search_and_fetch_clinvar("Hidradenitis Suppurativa", retmax=20)

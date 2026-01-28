@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-# Author: Diego Fuentes
-# Contact email: diegofupa@gmail.com
-# Barcelona
-# Date:2025-11-27
+"""
+Author: Diego Fuentes
+Contact email: diegofupa@gmail.com
+Barcelona
+Date:2025-11-27
+
+Module for fetching literature data from NCBI Entrez (PubMed and PMC).
+Can be used to search PubMed, fetch article metadata and abstracts, convert between PMIDs and PMCIDs
+and fetch full-text XML from PMC. Can be executed as is to demonstrate functionality.
+"""
 
 
 from Bio import Entrez
 from xml.etree import ElementTree as ET
-
+import time
 
 # -------------------------
 # Entrez configuration
 # -------------------------
 
 
-def configure_entrez(email, api_key=None, tool="gene_textminer"):
+def configure_entrez(
+    email: str, api_key: str = None, tool: str = "gene_textminer"
+) -> None:
     """
     Configure Entrez globally. Must be called once.
     Select the desired tool.
@@ -27,12 +35,22 @@ def configure_entrez(email, api_key=None, tool="gene_textminer"):
         Entrez.api_key = api_key
 
 
+def entrez_with_retry(func: callable, max_retries: int = 3, delay: float = 1.0) -> None:
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except RuntimeError as e:
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(delay * (attempt + 1))
+
+
 # -------------------------
 # PubMed Search
 # -------------------------
 
 
-def pubmed_search(query, retmax=500):
+def pubmed_search(query: str, retmax: int = 500) -> list[str]:
     """
     Run a PubMed search using Entrez.esearch.
     Retrieve a maximum of 500 papers by default.
@@ -40,7 +58,7 @@ def pubmed_search(query, retmax=500):
     Returns a list of PMIDs.
     """
     handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, retmode="xml")
-    record = Entrez.read(handle)
+    record = entrez_with_retry(lambda: Entrez.read(handle))
     handle.close()
     return record.get("IdList", [])
 
@@ -50,7 +68,7 @@ def pubmed_search(query, retmax=500):
 # -------------------------
 
 
-def pubmed_fetch_details(pmids):
+def pubmed_fetch_details(pmids: list[str]) -> list[dict]:
     """
     Fetch article metadata and abstracts from PubMed.
     Returns a list of dicts.
@@ -59,7 +77,7 @@ def pubmed_fetch_details(pmids):
         pmids = ",".join(pmids)
 
     handle = Entrez.efetch(db="pubmed", id=pmids, rettype="xml", retmode="xml")
-    data = handle.read()
+    data = entrez_with_retry(lambda: handle.read())
     handle.close()
 
     root = ET.fromstring(data)
@@ -89,17 +107,17 @@ def pubmed_fetch_details(pmids):
 # -------------------------
 
 
-def convert_pmid_to_pmcid(pmid):
+def convert_pmid_to_pmcid(pmid: str) -> str | None:
     """
     Convert a PMID to PMCID using Entrez.elink.
     Just in case the article has a full text available
     Returns PMCID or None.
     """
     handle = Entrez.elink(dbfrom="pubmed", db="pmc", id=pmid, linkname="pubmed_pmc")
-    record = Entrez.read(handle)
-    handle.close()
 
     try:
+        record = entrez_with_retry(lambda: Entrez.read(handle))
+        handle.close()
         link = record[0]["LinkSetDb"][0]["Link"][0]["Id"]
         return f"PMC{link}"
     except Exception:
@@ -111,15 +129,17 @@ def convert_pmid_to_pmcid(pmid):
 # -------------------------
 
 
-def pmc_fetch_fulltext(pmcid):
+def pmc_fetch_fulltext(pmcid: str) -> ET.Element | None:
     """
     Fetch the full-text XML for a given PMCID.
     Needs to be parsed downstream, returns an XML ElementTree root.
     """
     pmcid_clean = pmcid.replace("PMC", "")
 
-    handle = Entrez.efetch(db="pmc", id=pmcid_clean, rettype="full", retmode="xml")
-    xml_content = handle.read()
+    handle = Entrez.efetch(
+        db="pmc", id=pmcid_clean, rettype="full", retmode="xml", timeout=60
+    )
+    xml_content = entrez_with_retry(lambda: handle.read())
     handle.close()
 
     try:
@@ -134,7 +154,9 @@ def pmc_fetch_fulltext(pmcid):
 # -------------------------
 
 
-def search_and_fetch_pubmed(query, retmax=200, fetch_pmc=False):
+def search_and_fetch_pubmed(
+    query: str, retmax: int = 200, fetch_pmc: bool = False
+) -> list[dict]:
     """
     Searches PubMed and fetches details.
     Fetches titles + abstracts (and optionally full PMC text).
@@ -162,7 +184,7 @@ def search_and_fetch_pubmed(query, retmax=200, fetch_pmc=False):
 # -------------------------
 
 if __name__ == "__main__":
-    configure_entrez(email="diegofupa@gmail.com")
+    configure_entrez(email="examplemail@gmail.com")
 
     query = "Hidradenitis Suppurativa AND (genetics OR variant)"
     results = search_and_fetch_pubmed(query, retmax=10, fetch_pmc=True)
