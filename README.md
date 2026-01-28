@@ -85,7 +85,7 @@ Designed for bioinformaticians, researchers, and computational biologists conduc
 
 ```bash
 git clone https://github.com/dfupa/Genlit.git
-cd GenLit
+cd Genlit
 ```
 
 ### Step 2: Create Conda Environment
