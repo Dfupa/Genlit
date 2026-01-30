@@ -174,63 +174,126 @@ def run_search(
     """
     logger.info(f"Searching for: {disease_term}")
 
+    # ===== PUBMED/PMC SEARCH =====
     results = search_and_fetch_pubmed(
         str(disease_term + search_terms), retmax=retnumber, fetch_pmc=True
     )
 
-    pmids = [r["pmid"] for r in results]
+    # Handle empty literature results
+    if not results:
+        logger.warning(
+            f"No PubMed articles found for query: {disease_term}{search_terms}"
+        )
+        pmids = []
+        abstract_genes = []
+        full_text_genes = []
+        abstract_variants = []
+        full_text_variants = []
+    else:
+        pmids = [r["pmid"] for r in results]
+        abstract_genes = []
+        full_text_genes = []
+        abstract_variants = []
+        full_text_variants = []
 
-    abstract_genes = []
-    full_text_genes = []
-    abstract_variants = []
-    full_text_variants = []
+        # Extract entities from abstracts and full text
+        for r in results:
+            text = r["abstract"]
+            if not text:
+                continue
 
-    for r in results:
-        text = r["abstract"]
-        if not text:
-            continue
+            # Extract entities from abstracts
+            genes = extract_entities(text, min_score)
+            abstract_genes.extend(genes)
 
-        # Extract entities from abstracts
-        genes = extract_entities(text, min_score)
-        abstract_genes.extend(genes)
+            abstract_VAR = extract_variants(text)
+            abstract_variants.extend(abstract_VAR)
 
-        abstract_VAR = extract_variants(text)
-        abstract_variants.extend(abstract_VAR)
+            # Extract from full text if available
+            if r.get("pmc_xml"):
+                try:
+                    full_text = ET.tostring(r["pmc_xml"], encoding="unicode")
 
-        if r["pmc_xml"]:
-            full_text = ET.tostring(r["pmc_xml"], encoding="unicode")
+                    # Extract entities from full text
+                    full_text_g = extract_entities(full_text, min_score)
+                    full_text_genes.extend(full_text_g)
 
-            # Extract entities from full text
-            full_text_g = extract_entities(full_text, min_score)
-            full_text_genes.extend(full_text_g)
+                    full_VAR = extract_variants(full_text)
+                    full_text_variants.extend(full_VAR)
+                except Exception as e:
+                    logger.warning(
+                        f"Error extracting full text for PMID {r['pmid']}: {e}"
+                    )
+                    continue
 
-            full_VAR = extract_variants(full_text)
-            full_text_variants.extend(full_VAR)
+    # ===== CLINVAR SEARCH =====
+    ClinVar = search_and_fetch_clinvar(disease_term, retmax=retnumber)
 
-    # Fetch ClinVar variants
-    ClinVar = search_and_fetch_clinvar(disease_term, retmax=20)
+    # Handle empty ClinVar results
+    if not ClinVar:
+        logger.warning(f"No ClinVar results found for '{disease_term}'")
+        clinvar_genes = []
+        clinvar_variants = []
+        df = pd.DataFrame()
+        fdf = pd.DataFrame()
+    else:
+        df = pd.concat(ClinVar, ignore_index=True)
 
-    df = pd.concat(ClinVar, ignore_index=True)
+        # Filter by clinical relevance
+        fdf = df[df["clinical_significance"].isin(clinical_relevance)]
 
-    # Filter by clinical relevance:
-    fdf = df[df["clinical_significance"].isin(clinical_relevance)]
+        # Extract genes and variants from filtered ClinVar results
+        if fdf.empty:
+            logger.warning(
+                f"No pathogenic/likely pathogenic variants in ClinVar for '{disease_term}'. "
+                f"(Found {len(df)} total variants, but none match significance filter)"
+            )
+            clinvar_genes = []
+            clinvar_variants = []
+        else:
+            try:
+                # Extract gene symbols
+                clinvar_genes = (
+                    fdf["genes"]
+                    .dropna()
+                    .apply(lambda x: [g.strip() for g in x.split(",")])
+                    .explode()
+                    .unique()
+                    .tolist()
+                )
+            except Exception as e:
+                logger.warning(f"Error extracting ClinVar genes: {e}")
+                clinvar_genes = []
 
-    clinvar_genes = (
-        fdf["genes"]
-        .dropna()
-        .apply(lambda x: [g.strip() for g in x.split(",")])
-        .explode()
-        .unique()
+            try:
+                # Extract variation names
+                clinvar_variants = fdf["variation_name"].dropna().unique().tolist()
+            except Exception as e:
+                logger.warning(f"Error extracting ClinVar variants: {e}")
+                clinvar_variants = []
+
+    # ===== CALCULATE SUMMARY STATISTICS =====
+    all_genes = set(abstract_genes) | set(full_text_genes) | set(clinvar_genes)
+    all_variants = (
+        set(abstract_variants) | set(full_text_variants) | set(clinvar_variants)
     )
 
-    clinvar_variants = fdf["variation_name"].dropna().unique().tolist()
+    # Check for complete empty results
+    if not all_genes and not all_variants and not pmids:
+        logger.error(f"No results found from any source for: {disease_term}")
+        logger.info(
+            "Consider trying different search terms or checking disease name spelling"
+        )
+    elif not all_genes and not all_variants:
+        logger.warning(f"No genes or variants found, but found {len(pmids)} articles")
 
-    # Dedup all variant lists just in case
+    # ===== DEDUP ALL VARIANT LISTS =====
     abstract_variants = list(set(abstract_variants))
     full_text_variants = list(set(full_text_variants))
     clinvar_variants = list(set(clinvar_variants))
 
-    return {
+    # ===== COMPILE RESULTS DICTIONARY =====
+    results_dict = {
         "genes_in_both_abstract_clinvar": sorted(
             set(abstract_genes) & set(clinvar_genes)
         ),
@@ -246,7 +309,30 @@ def run_search(
             set(full_text_variants) - set(abstract_variants)
         ),
         "pmids": pmids,
+        # Summary statistics
+        "summary": {
+            "disease_query": disease_term,
+            "total_articles_found": len(pmids),
+            "genes_from_literature": len(set(abstract_genes) | set(full_text_genes)),
+            "genes_from_clinvar": len(clinvar_genes),
+            "total_unique_genes": len(all_genes),
+            "variants_from_literature": len(
+                set(abstract_variants) | set(full_text_variants)
+            ),
+            "variants_from_clinvar": len(clinvar_variants),
+            "total_unique_variants": len(all_variants),
+            "clinvar_pathogenic_variants": len(fdf) if not fdf.empty else 0,
+        },
     }
+
+    # Log summary statistics
+    summary = results_dict["summary"]
+    logger.info(
+        f"Search Summary: Found {summary['total_articles_found']} articles, "
+        f"{summary['total_unique_genes']} genes, {summary['total_unique_variants']} variants"
+    )
+
+    return results_dict
 
 
 # -------------------------

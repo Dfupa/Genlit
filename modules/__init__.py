@@ -15,4 +15,4 @@ __all__ = [
     "initialize_flair_models",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
