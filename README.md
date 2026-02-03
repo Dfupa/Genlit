@@ -1,3 +1,4 @@
+![DOI](https://zenodo.org/badge/1132697421.svg)
 # GenLit 🧬📚
 **GeneLit**: A Biomedical Literature Mining and Gene-Variant Curation Tool
 
