@@ -795,7 +795,8 @@ If you use GenLit in your research, please cite:
   author = {Fuentes Palacios, Diego},
   title = {GenLit: Biomedical Literature Mining and Gene-Variant Curation},
   year = {2026},
-  url = {https://github.com/dfupa/Genlit}
+  url = {https://github.com/dfupa/Genlit},
+  doi = {10.5281/zenodo.18470594}
 }
 ```
 
