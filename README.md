@@ -530,6 +530,15 @@ GenLit/
 - Generates structured JSON verdicts
 - Supports cost-conscious mode (chunking disabled) and performance mode (concurrent chunks)
 
+**`modules/hgnc_dedup.py`**
+- Module that downloads and saves as a JSON cache the HUGO Gene Nomenclature Committee database
+- Validates and cross-check gene synonyms and dedups genes and variants before any AI API query 
+
+**`scr/parse_bioinfo_file.py`**
+- Helper script that proceses the output file with the .txt
+- It allows to restructure it as a cleaner .csv
+- Produce some basic statistics as STDOUT and can process files in bulk.
+
 ---
 
 ## Advanced Configuration
@@ -618,46 +627,115 @@ Real-time logging with timestamps:
   ✓ Species linker loaded
 [LOG] All models initialized successfully
 
-
-================================================================================
-[INFO] GeneLit Pipeline Started
-================================================================================
+[INFO] Entrez configured with email: your.email@gmail.com, tool: gene_textminer
+[INFO] ================================================================================
+[INFO] GenLit Pipeline Started
+[INFO] ================================================================================
 [INFO] Disease Query: Hidradenitis Suppurativa
 [INFO] PubMed retmax: 10
 [INFO] Clinical relevance filter: Pathogenic, Likely pathogenic, Uncertain significance
-[INFO] NCBI Email: your.email@example.com
-[INFO] Output file: test.txt
+[INFO] Tagger minimum score (NLP): 0.75
+[INFO] NCBI Email: your.email@gmail.com
+[INFO] Output file: test_hs.txt
 [INFO] Perplexity cross-check: ENABLED
 [INFO]   - Model: sonar-pro
 [INFO]   - Temperature: 0.2
-[INFO]   - Max tokens: 2048
+[INFO]   - Token limit: 4096
 [INFO]   - Enable chunking: True
 [INFO]   - Max concurrent API calls: 3
 [INFO]   - Max retries per chunk: 3
-[INFO]   - Token limit for chunking: 4096
+[INFO]   - Max tokens per chunk: 2048
 [INFO]   - Env file: Default (.env)
+[INFO] ================================================================================
+[INFO] Searching for: Hidradenitis Suppurativa
+[INFO] Starting PubMed search: 'Hidradenitis Suppurativa AND (genetics OR variant)' (max 10 articles)
+[INFO] PubMed search found 10 articles
+[INFO] Successfully fetched details for 10/10 articles
+[INFO] Fetching PMC full text for 10 articles...
+[INFO] Successfully fetched PMC full text for 3 for 10 articles
+[INFO] ================================================================================
+[INFO] Running HGNC gene verification and deduplication...
+[INFO] ================================================================================
+[INFO] Raw genes collected: 18
+[INFO] Raw variants collected: 15
+[INFO] Calling verify_genes_with_hgnc()...
+[INFO] ================================================================================
+[INFO] HGNC VERIFICATION RESULTS:
+[INFO] ================================================================================
+[INFO] ✓ Canonical (verified): 14 genes
+[INFO]   Genes: HLA-DRB1, TMED10, PSMA4, MPO, PSTPIP1, IL4, WNT10A, PSENEN, KLF5, NCSTN... (+4)
+[INFO] ⚠ Unmapped (possible novel genes): 1 genes
+[INFO]   Genes: FSH
+[INFO] ✗ Invalid (filtered out): 3 entries
+[INFO] ================================================================================
+[INFO] ================================================================================
+[INFO] FINAL SEARCH SUMMARY:
+[INFO] ================================================================================
+[INFO] Disease: Hidradenitis Suppurativa
+[INFO] Articles found: 10
+[INFO] Raw genes collected: 18
+[INFO] Verified canonical genes: 14
+[INFO] Unmapped/novel genes: 1
+[INFO] Invalid genes (filtered): 3
+[INFO] Total variants: 15
+[INFO] Pathogenic ClinVar variants: 9
+[INFO] ================================================================================
+[INFO] Running Perplexity cross-check validation...
+[INFO] Loaded .env from current directory
+[INFO] [MODE] Chunking ENABLED - Aggressive mode (concurrent multi-chunk)
+[INFO] Chunking 45 candidates based on 4096 token limit...
+[INFO] Token budget: 4096 total, 253 fixed prompt, 3023 available for candidates (safety margin: 20.0%)
+[INFO] Split 45 candidates into 1 chunks
+[INFO] Chunk 1: 45 items
+[INFO] Created 1 chunk(s) for processing
+[INFO] Sending candidates in single API call...
+[INFO] HTTP Request: POST https://api.perplexity.ai/chat/completions "HTTP/1.1 200 OK"
+[INFO] ✓ Chunk processed: 4 confirmed, 14 rejected, 9 uncertain, 2 not assessed.
+
+[INFO] Aggregating results...
+[INFO] Aggregated results: 4 confirmed, 9 uncertain, 14 rejected, 2 not assessed
+[INFO] Results saved to TXT: test_hs.txt
+[INFO] Disease: Hidradenitis Suppurativa
+Generated: 2026-02-05 16:31:15
 ================================================================================
 
-Searching for: Hidradenitis Suppurativa... [LOG] Running Perplexity cross-check validation...
-
-[LOG] Loaded .env from current directory
-
-[MODE] Chunking ENABLED - Aggressive mode (concurrent multi-chunk)
-[LOG] Chunking 150 candidates based on 4096 token limit...
-[LOG] Created 2 chunk(s) for processing
-[LOG] Launching 2 concurrent queries (max 3 simultaneous)...
-
-[LOG] ✓ Chunk 1 processed: 45 confirmed, 12 rejected, 5 uncertain, 3 not assessed.
-[LOG] ✓ Chunk 2 processed: 38 confirmed, 8 rejected, 4 uncertain, 0 not assessed.
-[LOG] Aggregated results: 83 confirmed, 20 rejected, 9 uncertain, 3 not assessed
-
-[INFO] Querying Perplexity for cross-validation...
-
-[LOG] ✓ Successfully parsed structured JSON response
-[LOG] Confirmed: 83 genes
-[LOG] Uncertain: 9 genes
-[LOG] Rejected: 20 genes
-[LOG] Notes: Confirmed genes (NCSTN, PSENEN, PSTPIP1) and their listed variants have strong evidence from multiple sources, including MedlinePlus Genetics[1], comprehensive reviews[2], PubMed literature[3], and ClinVar listings for familial and sporadic HS cases...
+[INFO] Entity Type                                  Entity Name Associated Gene        Source Perplexity Status                                                   Notes
+       Gene                                     HLA-DRB1                          Both         Uncertain              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                         KLF4                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                         KLF5                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                          MPO                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                        PSMA4                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                      PSTPIP1                          Both         Confirmed              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                        SMPD4                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                         SOX9                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                       TMED10                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                       WNT10A                          Both          Rejected              Found in literature (PubMed|PMC) + ClinVar
+       Gene                                        ICD10                 Abstract Only      Not assessed Found only in literature (abstracts) but not in ClinVar
+       Gene                                         ICD9                 Abstract Only      Not assessed Found only in literature (abstracts) but not in ClinVar
+       Gene                                          FSH                 Full Text PMC      Not assessed     Found only in full-text articles but not in ClinVar
+       Gene                                        IL-13                 Full Text PMC      Not assessed     Found only in full-text articles but not in ClinVar
+       Gene                                         IL-4                 Full Text PMC      Not assessed     Found only in full-text articles but not in ClinVar
+       Gene                                           LH                 Full Text PMC      Not assessed     Found only in full-text articles but not in ClinVar
+    Variant                                   rs10816701      rs10816701 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant                                  rs121908120     rs121908120 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant                                   rs17090189      rs17090189 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant                                   rs17103088      rs17103088 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant                                   rs55811634      rs55811634 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant                                     rs679242        rs679242 Abstract Only          Rejected Found only in literature (abstracts) but not in ClinVar
+    Variant NM_003978.5(PSTPIP1):c.1034A>G (p.Tyr345Cys)         PSTPIP1  ClinVar Only         Confirmed Found only in ClinVar but not in abstracts or full text
+    Variant  NM_003978.5(PSTPIP1):c.655C>T (p.Gln219Ter)         PSTPIP1  ClinVar Only         Confirmed Found only in ClinVar but not in abstracts or full text
+    Variant  NM_003978.5(PSTPIP1):c.831G>T (p.Glu277Asp)         PSTPIP1  ClinVar Only         Confirmed Found only in ClinVar but not in abstracts or full text
+    Variant   NM_015331.3(NCSTN):c.1229C>T (p.Ala410Val)           NCSTN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+    Variant   NM_015331.3(NCSTN):c.1285C>T (p.Arg429Ter)           NCSTN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+    Variant               NM_015331.3(NCSTN):c.1352+1G>C           NCSTN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+    Variant NM_015331.3(NCSTN):c.344_351del (p.Thr115fs)           NCSTN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+    Variant      NM_015331.3(NCSTN):c.97G>A (p.Gly33Arg)           NCSTN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+    Variant    NM_172341.4(PSENEN):c.168T>G (p.Tyr56Ter)          PSENEN  ClinVar Only         Uncertain Found only in ClinVar but not in abstracts or full text
+[INFO] ================================================================================
+[INFO] Total entities: 31
+[INFO] ================================================================================
+[INFO] GenLit completed in 752.34 seconds!
+[INFO] ================================================================================
 ```
 
 ---

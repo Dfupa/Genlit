@@ -170,8 +170,7 @@ def run_search(
     This function performs the search based on the disease term.
     Uses a NCBI query by default, as well as filtering by clinical relevance
     And incorporating the tagger NLP min scoring for strong evidence.
-
-    ⭐ NEW: Integrates HGNC gene deduplication via verify_genes_with_hgnc()
+    Integrates HGNC gene deduplication via verify_genes_with_hgnc()
     to verify genes against the HUGO Gene Nomenclature Committee database.
 
     Returns a dictionary of cross-linked terms with VERIFIED genes
@@ -358,7 +357,7 @@ def run_search(
 
     # ===== CALCULATE SUMMARY STATISTICS =====
 
-    all_genes = set(verified_genes_canonical)  # ⭐ Use verified genes
+    all_genes = set(verified_genes_canonical)
     all_variants = (
         set(abstract_variants) | set(full_text_variants) | set(clinvar_variants)
     )
@@ -392,8 +391,8 @@ def run_search(
             set(clinvar_genes) - set(verified_genes_canonical)
         ),
         "genes_only_full_text": sorted(set(full_text_genes) - set(abstract_genes)),
-        "genes_unmapped": verified_genes_unmapped,  # ⭐ NEW: Include unmapped genes
-        "genes_invalid": verified_genes_invalid,  # ⭐ NEW: Include invalid genes
+        "genes_unmapped": verified_genes_unmapped,
+        "genes_invalid": verified_genes_invalid,
         "variants_in_abstract_clinvar": sorted(
             set(abstract_variants) & set(clinvar_variants)
         ),
@@ -403,7 +402,7 @@ def run_search(
             set(full_text_variants) - set(abstract_variants)
         ),
         "pmids": pmids,
-        "hgnc_verification": hgnc_verification,  # ⭐ NEW: Include verification results
+        "hgnc_verification": hgnc_verification,
         # Summary statistics
         "summary": {
             "disease_query": disease_term,
@@ -413,9 +412,9 @@ def run_search(
             ),
             "genes_from_clinvar_raw": len(clinvar_genes),
             "total_raw_genes": len(all_genes_raw),
-            "genes_verified_canonical": len(verified_genes_canonical),  # ⭐ NEW
-            "genes_unmapped": len(verified_genes_unmapped),  # ⭐ NEW
-            "genes_invalid": len(verified_genes_invalid),  # ⭐ NEW
+            "genes_verified_canonical": len(verified_genes_canonical),
+            "genes_unmapped": len(verified_genes_unmapped),
+            "genes_invalid": len(verified_genes_invalid),
             "total_unique_genes": len(all_genes),
             "variants_from_literature": len(
                 set(abstract_variants) | set(full_text_variants)
