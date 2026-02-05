@@ -169,12 +169,18 @@ def run_search(
     """
     This function performs the search based on the disease term.
     Uses a NCBI query by default, as well as filtering by clinical relevance
-    And incorporating the tagger NLP min scoring for strong evidence
-    Returns a dictionary of xlinked terms
+    And incorporating the tagger NLP min scoring for strong evidence.
+
+    ⭐ NEW: Integrates HGNC gene deduplication via verify_genes_with_hgnc()
+    to verify genes against the HUGO Gene Nomenclature Committee database.
+
+    Returns a dictionary of cross-linked terms with VERIFIED genes
     """
+
     logger.info(f"Searching for: {disease_term}")
 
     # ===== PUBMED/PMC SEARCH =====
+
     results = search_and_fetch_pubmed(
         str(disease_term + search_terms), retmax=retnumber, fetch_pmc=True
     )
@@ -220,6 +226,7 @@ def run_search(
 
                     full_VAR = extract_variants(full_text)
                     full_text_variants.extend(full_VAR)
+
                 except Exception as e:
                     logger.warning(
                         f"Error extracting full text for PMID {r['pmid']}: {e}"
@@ -227,6 +234,7 @@ def run_search(
                     continue
 
     # ===== CLINVAR SEARCH =====
+
     ClinVar = search_and_fetch_clinvar(disease_term, retmax=retnumber)
 
     # Handle empty ClinVar results
@@ -261,6 +269,7 @@ def run_search(
                     .unique()
                     .tolist()
                 )
+
             except Exception as e:
                 logger.warning(f"Error extracting ClinVar genes: {e}")
                 clinvar_genes = []
@@ -272,8 +281,84 @@ def run_search(
                 logger.warning(f"Error extracting ClinVar variants: {e}")
                 clinvar_variants = []
 
+    # ===== ⭐ NEW: HGNC GENE DEDUPLICATION & VERIFICATION =====
+    logger.info("=" * 80)
+    logger.info("Running HGNC gene verification and deduplication...")
+    logger.info("=" * 80)
+
+    # Collect all genes from all sources (before verification)
+    all_genes_raw = list(
+        set(abstract_genes) | set(full_text_genes) | set(clinvar_genes)
+    )
+    all_variants_raw = list(
+        set(abstract_variants) | set(full_text_variants) | set(clinvar_variants)
+    )
+
+    logger.info(f"Raw genes collected: {len(all_genes_raw)}")
+    logger.info(f"Raw variants collected: {len(all_variants_raw)}")
+
+    # Call wrapper function to verify genes against HGNC database
+    hgnc_verification = None
+    verified_genes_canonical = []
+    verified_genes_unmapped = []
+    verified_genes_invalid = []
+
+    try:
+        logger.info("Calling verify_genes_with_hgnc()...")
+        hgnc_verification = verify_genes_with_hgnc(all_genes_raw, all_variants_raw)
+
+        # Extract verification results
+        verified_genes_canonical = hgnc_verification.get("genes_canonical", [])
+        verified_genes_unmapped = hgnc_verification.get("genes_unmapped", [])
+        verified_genes_invalid = hgnc_verification.get("genes_invalid", [])
+
+        # Log detailed verification results
+        logger.info("=" * 80)
+        logger.info("HGNC VERIFICATION RESULTS:")
+        logger.info("=" * 80)
+        logger.info(f"✓ Canonical (verified): {len(verified_genes_canonical)} genes")
+        if verified_genes_canonical:
+            logger.info(
+                f"  Genes: {', '.join(verified_genes_canonical[:10])}"
+                + (
+                    f"... (+{len(verified_genes_canonical)-10})"
+                    if len(verified_genes_canonical) > 10
+                    else ""
+                )
+            )
+
+        logger.info(
+            f"⚠ Unmapped (possible novel genes): {len(verified_genes_unmapped)} genes"
+        )
+        if verified_genes_unmapped:
+            unmapped_names = [
+                g.get("canonical", g) if isinstance(g, dict) else g
+                for g in verified_genes_unmapped[:10]
+            ]
+            logger.info(
+                f"  Genes: {', '.join(unmapped_names)}"
+                + (
+                    f"... (+{len(verified_genes_unmapped)-10})"
+                    if len(verified_genes_unmapped) > 10
+                    else ""
+                )
+            )
+
+        logger.info(f"✗ Invalid (filtered out): {len(verified_genes_invalid)} entries")
+        logger.info("=" * 80)
+
+    except Exception as e:
+        logger.error(f"HGNC verification failed: {e}")
+        logger.debug(f"Exception details: {e}", exc_info=True)
+        logger.warning("Falling back to raw genes (without HGNC verification)")
+
+        # Fallback: use raw genes if verification fails
+        verified_genes_canonical = all_genes_raw
+        hgnc_verification = None
+
     # ===== CALCULATE SUMMARY STATISTICS =====
-    all_genes = set(abstract_genes) | set(full_text_genes) | set(clinvar_genes)
+
+    all_genes = set(verified_genes_canonical)  # ⭐ Use verified genes
     all_variants = (
         set(abstract_variants) | set(full_text_variants) | set(clinvar_variants)
     )
@@ -284,22 +369,31 @@ def run_search(
         logger.info(
             "Consider trying different search terms or checking disease name spelling"
         )
+
     elif not all_genes and not all_variants:
         logger.warning(f"No genes or variants found, but found {len(pmids)} articles")
 
     # ===== DEDUP ALL VARIANT LISTS =====
+
     abstract_variants = list(set(abstract_variants))
     full_text_variants = list(set(full_text_variants))
     clinvar_variants = list(set(clinvar_variants))
 
     # ===== COMPILE RESULTS DICTIONARY =====
+
     results_dict = {
         "genes_in_both_abstract_clinvar": sorted(
-            set(abstract_genes) & set(clinvar_genes)
+            set(abstract_genes) & set(verified_genes_canonical)
         ),
-        "genes_only_abstract": sorted(set(abstract_genes) - set(clinvar_genes)),
-        "genes_only_clinvar": sorted(set(clinvar_genes) - set(abstract_genes)),
+        "genes_only_abstract": sorted(
+            set(abstract_genes) - set(verified_genes_canonical)
+        ),
+        "genes_only_clinvar": sorted(
+            set(clinvar_genes) - set(verified_genes_canonical)
+        ),
         "genes_only_full_text": sorted(set(full_text_genes) - set(abstract_genes)),
+        "genes_unmapped": verified_genes_unmapped,  # ⭐ NEW: Include unmapped genes
+        "genes_invalid": verified_genes_invalid,  # ⭐ NEW: Include invalid genes
         "variants_in_abstract_clinvar": sorted(
             set(abstract_variants) & set(clinvar_variants)
         ),
@@ -309,12 +403,19 @@ def run_search(
             set(full_text_variants) - set(abstract_variants)
         ),
         "pmids": pmids,
+        "hgnc_verification": hgnc_verification,  # ⭐ NEW: Include verification results
         # Summary statistics
         "summary": {
             "disease_query": disease_term,
             "total_articles_found": len(pmids),
-            "genes_from_literature": len(set(abstract_genes) | set(full_text_genes)),
-            "genes_from_clinvar": len(clinvar_genes),
+            "genes_from_literature_raw": len(
+                set(abstract_genes) | set(full_text_genes)
+            ),
+            "genes_from_clinvar_raw": len(clinvar_genes),
+            "total_raw_genes": len(all_genes_raw),
+            "genes_verified_canonical": len(verified_genes_canonical),  # ⭐ NEW
+            "genes_unmapped": len(verified_genes_unmapped),  # ⭐ NEW
+            "genes_invalid": len(verified_genes_invalid),  # ⭐ NEW
             "total_unique_genes": len(all_genes),
             "variants_from_literature": len(
                 set(abstract_variants) | set(full_text_variants)
@@ -327,10 +428,20 @@ def run_search(
 
     # Log summary statistics
     summary = results_dict["summary"]
+    logger.info("=" * 80)
+    logger.info("FINAL SEARCH SUMMARY:")
+    logger.info("=" * 80)
+    logger.info(f"Disease: {summary['disease_query']}")
+    logger.info(f"Articles found: {summary['total_articles_found']}")
+    logger.info(f"Raw genes collected: {summary['total_raw_genes']}")
+    logger.info(f"Verified canonical genes: {summary['genes_verified_canonical']}")
+    logger.info(f"Unmapped/novel genes: {summary['genes_unmapped']}")
+    logger.info(f"Invalid genes (filtered): {summary['genes_invalid']}")
+    logger.info(f"Total variants: {summary['total_unique_variants']}")
     logger.info(
-        f"Search Summary: Found {summary['total_articles_found']} articles, "
-        f"{summary['total_unique_genes']} genes, {summary['total_unique_variants']} variants"
+        f"Pathogenic ClinVar variants: {summary['clinvar_pathogenic_variants']}"
     )
+    logger.info("=" * 80)
 
     return results_dict
 
