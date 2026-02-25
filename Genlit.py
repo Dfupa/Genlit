@@ -9,7 +9,6 @@ import logging
 import argparse
 import json as json_lib
 import pandas as pd
-
 from datetime import datetime
 from Bio import Entrez
 from xml.etree import ElementTree as ET
@@ -63,6 +62,10 @@ def extract_entities(text: str, min_score: float = 0.75) -> list[str]:
 
 
 def is_valid_gene(entity) -> bool:
+    """Filter gene entities to remove common false positives and non-gene terms.
+    Uses regex patterns to identify valid gene symbols (e.g., all caps, 2-8 characters, no common stop words).
+    Returns True if entity is a valid gene mention, False otherwise.
+    """
     ACRONYM_PATTERN = re.compile(r"^[A-Z0-9\-]{2,8}$")
     text = entity.data_point.text
     # keep acronyms only
@@ -72,6 +75,9 @@ def is_valid_gene(entity) -> bool:
 
 
 def has_strong_gene_link(entity, min_score: float = 0.75) -> bool:
+    """Check if gene entity tagged by the NLP model has a strong link to the label
+    of interest with a confidence score above the threshold.
+    """
     if entity.score >= min_score:
         return True
     return False
@@ -161,10 +167,11 @@ def extract_variants(text: str) -> list[str]:
 
 def run_search(
     disease_term: str,
-    search_terms: str = " AND (genetics OR variant)",
+    search_terms: str = " AND ((genetics OR genomics) OR (variant OR genetic variant))",
     clinical_relevance: list[str] = ["Pathogenic", "Likely pathogenic"],
     retnumber: int = 10,
     min_score: float = 0.75,
+    min_review_stars: int = 0,
 ) -> dict:
     """
     This function performs the search based on the disease term.
@@ -246,6 +253,16 @@ def run_search(
     else:
         df = pd.concat(ClinVar, ignore_index=True)
 
+        # Filter by ClinVar review strength (0–4 stars)
+        if min_review_stars is not None and min_review_stars > 0:
+            before = len(df)
+            df = df[df.get("review_status_stars", 0) >= min_review_stars]
+            after = len(df)
+            logger.info(
+                f"ClinVar review-status filter: >= {min_review_stars} stars "
+                f"(Filtered from {before} → {after} final variants)"
+            )
+
         # Filter by clinical relevance
         fdf = df[df["clinical_significance"].isin(clinical_relevance)]
 
@@ -280,7 +297,7 @@ def run_search(
                 logger.warning(f"Error extracting ClinVar variants: {e}")
                 clinvar_variants = []
 
-    # ===== ⭐ NEW: HGNC GENE DEDUPLICATION & VERIFICATION =====
+    # ===== HGNC GENE DEDUPLICATION & VERIFICATION =====
     logger.info("=" * 80)
     logger.info("Running HGNC gene verification and deduplication...")
     logger.info("=" * 80)
@@ -327,7 +344,7 @@ def run_search(
             )
 
         logger.info(
-            f"⚠ Unmapped (possible novel genes): {len(verified_genes_unmapped)} genes"
+            f"⚠ Unmapped (not found in HGNC): {len(verified_genes_unmapped)} genes"
         )
         if verified_genes_unmapped:
             unmapped_names = [
@@ -351,7 +368,7 @@ def run_search(
         logger.debug(f"Exception details: {e}", exc_info=True)
         logger.warning("Falling back to raw genes (without HGNC verification)")
 
-        # Fallback: use raw genes if verification fails
+        # Fallback -> use raw genes if verification fails
         verified_genes_canonical = all_genes_raw
         hgnc_verification = None
 
@@ -372,7 +389,7 @@ def run_search(
     elif not all_genes and not all_variants:
         logger.warning(f"No genes or variants found, but found {len(pmids)} articles")
 
-    # ===== DEDUP ALL VARIANT LISTS =====
+    # Remove duplicates from gene and variant lists (if any)
 
     abstract_variants = list(set(abstract_variants))
     full_text_variants = list(set(full_text_variants))
@@ -463,7 +480,7 @@ def output_results(
     Args:
         disease: The disease term searched
         pipeline_results: Dictionary from run_search()
-        perplexity_verdict: Dictionary from validate_with_perplexity()
+        perplexity_verdict: Dictionary from perplexity_API_search()
         output_file: Output filepath (auto-detects .csv or .txt)
         verbose: Print to console if True
     """
@@ -489,13 +506,39 @@ def output_results(
         match = re.search(r"\(([A-Z0-9\-]+)\):", variant_str)
         if match:
             return match.group(1)
+        return variant_str  # rsID or other format
 
-        # If no pattern match, return original (could be rsID or other format)
-        return variant_str
+    # Helper to get perplexity confidence/rationale for an entity
+    def get_perplexity_confidence(
+        entity_name: str, is_variant: bool = False
+    ) -> tuple[str, str]:
+        """Get confidence score and rationale for entity from perplexity_verdict.
+        For variants, tries to extract gene name first for lookup in confidence dict.
+        Args:
+            entity_name: Gene name or variant string
+            is_variant: If True, extract gene name from variant string first for lookup
+        Returns:
+            Tuple[str, str] or ("", "") if not found.
+        """
+        if not perplexity_verdict or "confidence" not in perplexity_verdict:
+            return "", ""
 
-    # 1) Genes section
+        # For variants, try gene name first (as status does)
+        lookup_name = (
+            extract_gene_from_variant(entity_name) if is_variant else entity_name
+        )
+
+        conf_str = perplexity_verdict["confidence"].get(lookup_name, "")
+        if conf_str:
+            # Split "0.95 | Multiple ClinVar assertions"
+            parts = conf_str.split(" | ", 1)
+            score = parts[0] if parts else ""
+            rationale = parts[1] if len(parts) > 1 else ""
+            return score, rationale
+        return "", ""
+
+    # 1) Genes section - WITH Perplexity
     if perplexity_verdict and "error" not in perplexity_verdict:
-
         # Extract gene lists from Perplexity verdict for quick lookup
         confirmed_genes = set(perplexity_verdict.get("confirmed", []))
         uncertain_genes = set(perplexity_verdict.get("uncertain", []))
@@ -512,11 +555,9 @@ def output_results(
             Returns:
                 Status string: "Confirmed", "Uncertain", "Rejected", or "Not assessed"
             """
-            # For variants, extract the gene name first
             lookup_name = (
                 extract_gene_from_variant(entity_name) if is_variant else entity_name
             )
-
             if lookup_name in confirmed_genes:
                 return "Confirmed"
             elif lookup_name in uncertain_genes:
@@ -526,9 +567,11 @@ def output_results(
             else:
                 return "Not assessed"
 
-        # 1) Genes section
         for gene in pipeline_results.get("genes_in_both_abstract_clinvar", []):
             status = get_perplexity_status(gene, is_variant=False)
+            conf_score, conf_rationale = get_perplexity_confidence(
+                gene, is_variant=False
+            )
             rows.append(
                 {
                     "Entity Type": "Gene",
@@ -536,211 +579,161 @@ def output_results(
                     "Associated Gene": "",
                     "Source": "Both",
                     "Perplexity Status": status,
+                    "Perplexity Confidence": conf_score,
+                    "Perplexity Rationale": conf_rationale,
                     "Notes": "Found in literature (PubMed|PMC) + ClinVar",
                 }
             )
 
-        for gene in pipeline_results.get("genes_only_abstract", []):
-            status = get_perplexity_status(gene, is_variant=False)
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "Abstract Only",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in literature (abstracts) but not in ClinVar",
-                }
-            )
-
-        for gene in pipeline_results.get("genes_only_clinvar", []):
-            status = get_perplexity_status(gene, is_variant=False)
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "ClinVar Only",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in ClinVar but not in fetched abstracts",
-                }
-            )
-
-        for gene in pipeline_results.get("genes_only_full_text", []):
-            status = get_perplexity_status(gene, is_variant=False)
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "Full Text PMC",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in full-text articles but not in ClinVar",
-                }
-            )
+        #  Repeat for other gene sections (genes_only_abstract, etc.)
+        for gene_list, source, note in [
+            (
+                pipeline_results.get("genes_only_abstract", []),
+                "Abstract Only",
+                "Found only in literature (abstracts) but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("genes_only_clinvar", []),
+                "ClinVar Only",
+                "Found only in ClinVar but not in fetched abstracts",
+            ),
+            (
+                pipeline_results.get("genes_only_full_text", []),
+                "Full Text PMC",
+                "Found only in full-text articles but not in ClinVar",
+            ),
+        ]:
+            for gene in gene_list:
+                status = get_perplexity_status(gene, is_variant=False)
+                conf_score, conf_rationale = get_perplexity_confidence(
+                    gene, is_variant=False
+                )
+                rows.append(
+                    {
+                        "Entity Type": "Gene",
+                        "Entity Name": gene,
+                        "Associated Gene": "",
+                        "Source": source,
+                        "Perplexity Status": status,
+                        "Perplexity Confidence": conf_score,
+                        "Perplexity Rationale": conf_rationale,
+                        "Notes": note,
+                    }
+                )
 
         # 2) Variants section
-        for variant in pipeline_results.get("variants_in_abstract_clinvar", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            status = get_perplexity_status(variant_str, is_variant=True)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Both",
-                    "Perplexity Status": status,
-                    "Notes": "Found in literature (PubMed|PMC) + ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_text", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            status = get_perplexity_status(variant_str, is_variant=True)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Abstract Only",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in literature (abstracts) but not in ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_full_text", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            status = get_perplexity_status(variant_str, is_variant=True)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Full Text Only",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in full-text articles but not in ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_clinvar", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            status = get_perplexity_status(variant_str, is_variant=True)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "ClinVar Only",
-                    "Perplexity Status": status,
-                    "Notes": "Found only in ClinVar but not in abstracts or full text",
-                }
-            )
+        for variant_list, source, note in [
+            (
+                pipeline_results.get("variants_in_abstract_clinvar", []),
+                "Both",
+                "Found in literature (PubMed|PMC) + ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_text", []),
+                "Abstract Only",
+                "Found only in literature (abstracts) but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_full_text", []),
+                "Full Text Only",
+                "Found only in full-text articles but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_clinvar", []),
+                "ClinVar Only",
+                "Found only in ClinVar but not in abstracts or full text",
+            ),
+        ]:
+            for variant in variant_list:
+                variant_str = str(variant)
+                gene_from_variant = extract_gene_from_variant(variant_str)
+                status = get_perplexity_status(variant_str, is_variant=True)
+                conf_score, conf_rationale = get_perplexity_confidence(
+                    variant_str, is_variant=True
+                )
+                rows.append(
+                    {
+                        "Entity Type": "Variant",
+                        "Entity Name": variant_str,
+                        "Associated Gene": gene_from_variant,
+                        "Source": source,
+                        "Perplexity Status": status,
+                        "Perplexity Confidence": conf_score,
+                        "Perplexity Rationale": conf_rationale,
+                        "Notes": note,
+                    }
+                )
 
     else:
+        # Fallback WITHOUT Perplexity mode activated
+        for gene_list, source, note in [
+            (
+                pipeline_results.get("genes_in_both_abstract_clinvar", []),
+                "Both",
+                "Found in literature (PubMed|PMC) + ClinVar",
+            ),
+            (
+                pipeline_results.get("genes_only_abstract", []),
+                "Abstract Only",
+                "Found only in literature (abstracts) but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("genes_only_clinvar", []),
+                "ClinVar Only",
+                "Found only in ClinVar but not in fetched abstracts",
+            ),
+            (
+                pipeline_results.get("genes_only_full_text", []),
+                "Full Text PMC",
+                "Found only in full-text articles but not in ClinVar",
+            ),
+        ]:
+            for gene in gene_list:
+                rows.append(
+                    {
+                        "Entity Type": "Gene",
+                        "Entity Name": gene,
+                        "Associated Gene": "",
+                        "Source": source,
+                        "Notes": note,
+                    }
+                )
 
-        # Fallback when Perplexity verdict is unavailable
-        for gene in pipeline_results.get("genes_in_both_abstract_clinvar", []):
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "Both",
-                    "Notes": "Found in literature (PubMed|PMC) + ClinVar",
-                }
-            )
+        for variant_list, source, note in [
+            (
+                pipeline_results.get("variants_in_abstract_clinvar", []),
+                "Both",
+                "Found in literature (PubMed|PMC) + ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_text", []),
+                "Abstract Only",
+                "Found only in literature (abstracts) but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_full_text", []),
+                "Full Text Only",
+                "Found only in full-text articles but not in ClinVar",
+            ),
+            (
+                pipeline_results.get("variants_only_clinvar", []),
+                "ClinVar Only",
+                "Found only in ClinVar but not in abstracts or full text",
+            ),
+        ]:
+            for variant in variant_list:
+                variant_str = str(variant)
+                gene_from_variant = extract_gene_from_variant(variant_str)
+                rows.append(
+                    {
+                        "Entity Type": "Variant",
+                        "Entity Name": variant_str,
+                        "Associated Gene": gene_from_variant,
+                        "Source": source,
+                        "Notes": note,
+                    }
+                )
 
-        for gene in pipeline_results.get("genes_only_abstract", []):
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "Abstract Only",
-                    "Notes": "Found only in literature (abstracts) but not in ClinVar",
-                }
-            )
-
-        for gene in pipeline_results.get("genes_only_clinvar", []):
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "ClinVar Only",
-                    "Notes": "Found only in ClinVar but not in fetched abstracts",
-                }
-            )
-
-        for gene in pipeline_results.get("genes_only_full_text", []):
-            rows.append(
-                {
-                    "Entity Type": "Gene",
-                    "Entity Name": gene,
-                    "Associated Gene": "",
-                    "Source": "Full Text PMC",
-                    "Notes": "Found only in full-text articles but not in ClinVar",
-                }
-            )
-
-        # 2) Variants section (without Perplexity status)
-        for variant in pipeline_results.get("variants_in_abstract_clinvar", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Both",
-                    "Notes": "Found in literature (PubMed|PMC) + ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_text", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Abstract Only",
-                    "Notes": "Found only in literature (abstracts) but not in ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_full_text", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "Full Text Only",
-                    "Notes": "Found only in full-text articles but not in ClinVar",
-                }
-            )
-
-        for variant in pipeline_results.get("variants_only_clinvar", []):
-            variant_str = str(variant)
-            gene_from_variant = extract_gene_from_variant(variant_str)
-            rows.append(
-                {
-                    "Entity Type": "Variant",
-                    "Entity Name": variant_str,
-                    "Associated Gene": gene_from_variant,
-                    "Source": "ClinVar Only",
-                    "Notes": "Found only in ClinVar but not in abstracts or full text",
-                }
-            )
-
-    # Create DataFrame
     df = pd.DataFrame(rows)
 
     # Prepare output
@@ -751,28 +744,44 @@ def output_results(
         if output_file.endswith(".csv"):
             df.to_csv(output_file, index=False)
             logger.info(f"Results saved to CSV: {output_file}")
+        else:  # TXT → TAB-SEPARATED
+            df.to_csv(output_file, sep="\t", index=False)
 
-        else:  # Default to TXT (tab-separated)
+            with open(output_file, "r") as f:
+                content = f.read()
+
+                header_text = (
+                    f"Disease: {disease}\n"
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"{'='*80}\n\n"
+                    f"{content}"
+                )
+
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(header_text)
-                f.write(df.to_string(index=False))
-                f.write(f"\n{'='*80}\n")
-                f.write(f"Total entities: {len(df)}\n")
-                if perplexity_verdict:
-                    f.write(
-                        f"Perplexity verdict: {json_lib.dumps(perplexity_verdict, indent=2)}\n"
-                    )
 
-            logger.info(f"Results saved to TXT: {output_file}")
+            logger.info(
+                f"Results saved to TSV: {output_file} (tab-separated, CSV compatible)"
+            )
 
-    # Also print to console
+            # Append perplexity verdict if present
+            if perplexity_verdict:
+                with open(output_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n{'='*80}\nPerplexity verdict:\n")
+                    f.write(json_lib.dumps(perplexity_verdict, indent=2) + "\n")
+
+                logger.info(
+                    f"Results saved to TSV: {output_file} (tab-separated, CSV compatible)"
+                )
+
+    # Console output
     if verbose or not output_file:
         logger.info(header_text)
         logger.info(df.to_string(index=False))
         logger.info(f"{'='*80}")
         logger.info(f"Total entities: {len(df)}")
         if perplexity_verdict and "error" not in perplexity_verdict:
-            logger.info(
+            logger.debug(
                 f"Perplexity Verdict:\n{json_lib.dumps(perplexity_verdict, indent=2)}"
             )
 
@@ -926,6 +935,27 @@ Options: 'Pathogenic', 'Likely pathogenic', 'Uncertain significance',
     )
 
     parser.add_argument(
+        "--min-review-stars",
+        type=int,
+        choices=[0, 1, 2, 3, 4],
+        default=0,
+        help=(
+            "Minimum ClinVar review status (select numerically 0–4 stars) for variants to be included.\n"
+            "Stars reflect ClinVar evaluation criteria (germline & somatic):\n"
+            "  ★★★★ practice guideline – submitted record with classification from a practice guideline.\n"
+            "  ★★★  reviewed by expert panel – submitted record with classification by an expert panel.\n"
+            "  ★★   criteria provided, multiple submitters – multiple submitters with assertion criteria\n"
+            "           and evidence; for germline, classifications agree (no conflicts);\n"
+            "           for somatic, multiple submitters of clinical impact.\n"
+            "  ★    criteria provided – single submitter OR conflicting classifications across submitters,\n"
+            "           but assertion criteria and evidence (or public contact) were provided.\n"
+            "  0    no assertion criteria or no classification – one or more records without assertion\n"
+            "           criteria/evidence, no classification provided, or variant only classified as part of\n"
+            "           a haplotype/genotype."
+        ),
+    )
+
+    parser.add_argument(
         "--enable-chunking",
         type=lambda x: x.lower() in ("true", "1", "yes", "on"),
         default=True,
@@ -1014,6 +1044,7 @@ Example: --token-limit 6000""",
     logger.info(f"Disease Query: {args.query}")
     logger.info(f"PubMed retmax: {args.retmax}")
     logger.info(f"Clinical relevance filter: {', '.join(args.clinical_relevance)}")
+    logger.info(f"Min ClinVar review stars: {args.min_review_stars}")
     logger.info(f"Tagger minimum score (NLP): {args.score}")
     logger.info(f"NCBI Email: {args.email}")
     logger.info(f"Output file: {args.output if args.output else 'STDOUT'}")
@@ -1043,6 +1074,7 @@ Example: --token-limit 6000""",
         clinical_relevance=args.clinical_relevance,
         retnumber=args.retmax,
         min_score=args.score,
+        min_review_stars=args.min_review_stars,
     )
 
     # ===== OPTIONAL PERPLEXITY CROSS-CHECK =====

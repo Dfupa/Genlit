@@ -98,7 +98,16 @@ TASK:
    - REJECTED: No credible association with the disease whatsoever, including spurious links in fetched data
    - NOT ASSESSED: If insufficient information is available to make a determination or a limit in the token count is reached.
 
-5. Return structured JSON with your verdict"""
+5. For EACH candidate that you mention in any category, add an entry in the 'confidence' object where:
+   - The key is exactly the candidate identifier (e.g. "ATM", "BRCA2 c.3617del").
+   - The value is a single string in the format:
+     "<confidence_float_0.0-1.0> | <brief rationale>"
+   Example:
+     "ATM": "0.95 | Multiple ClinVar pathogenic assertions and strong disease literature"
+
+    → EVERY candidate MUST have a confidence entry matching keys in arrays (confirmed, uncertain, rejected) with a confidence rationale that should be brief but informative.
+
+6. Return structured JSON with your verdict. Strictly follow the JSON schema provided in the system instructions. NO OMISSIONS: If token-limited, use NOT_ASSESSED for remainder"""
 
     return estimate_tokens(template)
 
@@ -242,7 +251,7 @@ async def resilient_perplexity_call(
     response_schema = {
         "type": "json_schema",
         "json_schema": {
-            "name": "gene_variant_verdict",
+            "name": "genevariantverdict",
             "strict": True,
             "schema": {
                 "type": "object",
@@ -250,26 +259,41 @@ async def resilient_perplexity_call(
                     "confirmed": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of genes/variants with strong evidence of disease association",
+                        "description": "List of genes/variants with strong evidence of disease association.",
                     },
                     "uncertain": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of genes/variants with limited or conflicting evidence",
+                        "description": "List of genes/variants with limited or conflicting evidence.",
                     },
                     "rejected": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of genes/variants with no credible disease association whatsoever",
+                        "description": "List of genes/variants with no credible disease association whatsoever.",
                     },
                     "not_assessed": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of genes/variants that were not assessed due to insufficient information or token limits",
+                        "description": "List of genes/variants that were not assessed due to insufficient information or token limits.",
                     },
                     "notes": {
                         "type": "string",
-                        "description": "Detailed explanation of categorization rationale and evidence quality",
+                        "description": "Detailed explanation of categorization rationale and evidence quality.",
+                    },
+                    "confidence": {
+                        "type": "object",
+                        "description": (
+                            "MUST INCLUDE Per-candidate confidence and brief rationale for EVERY candidate. "
+                            "Each key is EXACTLY the candidate identifier for confirmed, rejected or uncertain items"
+                            '(e.g. "ATM", "BRCA2 c.3617del"), and each value is a '
+                            'string in the format "<confidence_float_0.0-1.0> | <brief rationale>". '
+                            'Example: "ATM": "0.95 | Multiple ClinVar pathogenic assertions and strong disease literature".'
+                        ),
+                        "minProperties": 1,
+                        "additionalProperties": {
+                            "type": "string",
+                            "pattern": r"^\d+\.\d{2}\s*\|\s*.+$",  # Enforces "0.95 | rationale"
+                        },
                     },
                 },
                 "required": [
@@ -278,6 +302,7 @@ async def resilient_perplexity_call(
                     "rejected",
                     "not_assessed",
                     "notes",
+                    "confidence",
                 ],
                 "additionalProperties": False,
             },
@@ -306,7 +331,16 @@ TASK:
    - REJECTED: No credible association with the disease whatsoever, including spurious links in fetched data
    - NOT ASSESSED: If insufficient information is available to make a determination or a limit in the token count is reached.
 
-5. Return structured JSON with your verdict"""
+5. For EACH candidate that you mention in any category, add an entry in the 'confidence' object where:
+   - The key is exactly the candidate identifier (e.g. "ATM", "BRCA2 c.3617del").
+   - The value is a single string in the format:
+     "<confidence_float_0.0-1.0> | <brief rationale>"
+   Example:
+     "ATM": "0.95 | Multiple ClinVar pathogenic assertions and strong disease literature"
+
+    → EVERY candidate MUST have a confidence entry matching keys in arrays (confirmed, uncertain, rejected) with a confidence rationale that should be brief but informative.
+
+6. Return structured JSON with your verdict. Strictly follow the JSON schema provided in the system instructions. NO OMISSIONS: If token-limited, use NOT_ASSESSED for remainder"""
 
     # Retry loop
     for attempt in range(max_retries):
@@ -392,6 +426,7 @@ def aggregate_verdicts(verdicts: List[Dict], verbose: bool = False) -> Dict:
         "notes": "",
         "chunk_count": len(verdicts),
         "successful_chunks": sum(1 for v in verdicts if v is not None),
+        "confidence": {},
     }
 
     all_notes = []
@@ -400,28 +435,30 @@ def aggregate_verdicts(verdicts: List[Dict], verbose: bool = False) -> Dict:
         if verdict is None:
             continue
 
-        # Add items and deduplicate
-        for key in ["confirmed", "uncertain", "rejected", "not_assessed"]:
+        for key in ("confirmed", "uncertain", "rejected", "not_assessed"):
             if key in verdict:
                 aggregated[key].extend(verdict[key])
 
-        # Collect notes
         if verdict.get("notes"):
-            all_notes.append(verdict["notes"][:-1])
+            all_notes.append(verdict["notes"])
 
-    # QA STEP: Deduplicate while preserving order
-    for key in ["confirmed", "uncertain", "rejected", "not_assessed"]:
+        if "confidence" in verdict and isinstance(verdict["confidence"], dict):
+            for cand_id, conf_str in verdict["confidence"].items():
+                # last chunk's view wins; easy to reason about downstream
+                aggregated["confidence"][cand_id] = conf_str
+
+    # dedupe lists as before
+    for key in ("confirmed", "uncertain", "rejected", "not_assessed"):
         seen = set()
         deduped = []
         for item in aggregated[key]:
             if item not in seen:
                 seen.add(item)
                 deduped.append(item)
-        aggregated[key] = sorted(deduped)
+        aggregated[key] = deduped
 
-    # Combine notes
     aggregated["notes"] = (
-        " | ".join(all_notes) if all_notes else "Processed all chunks successfully."
+        " ".join(all_notes) if all_notes else "Processed all chunks successfully."
     )
 
     if verbose:
@@ -432,6 +469,47 @@ def aggregate_verdicts(verdicts: List[Dict], verbose: bool = False) -> Dict:
             f"{len(aggregated['rejected'])} rejected, "
             f"{len(aggregated['not_assessed'])} not assessed"
         )
+
+    return aggregated
+
+
+def validate_confidence_coverage(
+    aggregated: dict, original_candidates: dict, verbose: bool = False
+) -> dict:
+    """Ensure confidence covers all string candidates (genes/variants).
+    If any candidate is missing from confidence, add a NOT_ASSESSED entry with rationale.
+    Args:
+        aggregated: Aggregated verdict dictionary with 'confidence' field
+        original_candidates: Original candidates dictionary to check coverage against
+        verbose: Print details about missing confidence entries
+    """
+    all_candidates: list[str] = []
+
+    for key, items in original_candidates.items():
+        # Only process candidate lists (genes/variants), skip metadata dicts
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            # Only enforce for simple string identifiers
+            if isinstance(item, str):
+                all_candidates.append(item)
+
+    conf_keys = set(aggregated.get("confidence", {}).keys())
+
+    # Only hash strings
+    missing = set(all_candidates) - conf_keys
+
+    if missing:
+        if verbose:
+            logger.warning(
+                f"Missing confidence for {len(missing)} candidates "
+                f"(showing up to 10): {list(missing)[:10]}"
+            )
+        # Auto-fill NOT_ASSESSED for missing
+        for cand in missing:
+            aggregated["confidence"][
+                cand
+            ] = "0.00 | Confidence missing from model response (expected for rejected results)"
 
     return aggregated
 
@@ -485,6 +563,7 @@ async def perplexity_API_search_async(
             "rejected": [],
             "not_assessed": [],
             "notes": "",
+            "confidence": {},
         }
 
     # Determine chunking strategy
@@ -570,6 +649,7 @@ async def perplexity_API_search_async(
         logger.info("Aggregating results...")
 
     aggregated = aggregate_verdicts(verdicts, verbose=verbose)
+    aggregated = validate_confidence_coverage(aggregated, candidates, verbose=verbose)
 
     # Add mode information
     aggregated["chunking_enabled"] = enable_chunking
@@ -1381,6 +1461,21 @@ if __name__ == "__main__":
         logger.error("PERPLEXITY_API_KEY not found in environment")
         exit(1)
 
+    # Helper to pretty-print confidence per candidate
+    def print_confidence_block(conf_dict: dict, max_candidates: int = 20) -> None:
+        if not conf_dict:
+            print("  No confidence information available.")
+            return
+
+        print("  Confidence per candidate:")
+        for i, (cand_id, conf_str) in enumerate(conf_dict.items()):
+            if i >= max_candidates:
+                remaining = len(conf_dict) - max_candidates
+                print(f"  ... ({remaining} more candidates not shown)")
+                break
+            # conf_str already looks like: "Candidate X: 0.87 | rationale"
+            print(f"    - [{cand_id}] {conf_str}")
+
     # Example 1: With chunking enabled (default, faster but more API calls)
     print("\n--- MODE 1: CHUNKING ENABLED (Concurrent, Faster) ---\n")
     results_chunked = perplexity_API_search(
@@ -1390,7 +1485,7 @@ if __name__ == "__main__":
         verbose=True,
         model="sonar",
         temperature=0.2,
-        max_tokens=2048,
+        token_chunk=2048,
         max_retries=3,
         max_concurrent=3,
         token_limit=4096,
@@ -1398,20 +1493,26 @@ if __name__ == "__main__":
     )
     elapsed1 = time.time() - start_time
     start_time2 = time.time()
+
     print("\n" + "=" * 80)
     print("Results with Chunking")
     print("=" * 80)
     print(
-        f"Mode: {results_chunked.get('mode')} | Chunks: {results_chunked.get('chunk_count')} "
-        f"| Successful: {results_chunked.get('successful_chunks')}"
+        f"Mode: {results_chunked.get('mode')} | "
+        f"Chunks: {results_chunked.get('chunk_count')} | "
+        f"Successful: {results_chunked.get('successful_chunks')}"
     )
     print(
         f"Confirmed: {len(results_chunked.get('confirmed', []))} | "
-        f"Rejected: {len(results_chunked.get('rejected', []))}"
+        f"Uncertain: {len(results_chunked.get('uncertain', []))} | "
+        f"Rejected: {len(results_chunked.get('rejected', []))} | "
+        f"Not assessed: {len(results_chunked.get('not_assessed', []))}"
     )
-    print()
-    print(results_chunked)
-    print()
+    print("Notes:")
+    print(f"  {results_chunked.get('notes', '').strip()}\n")
+
+    print_confidence_block(results_chunked.get("confidence", {}))
+    print()  # extra line break
 
     # Example 2: With chunking disabled (conservative, fewer API calls but may hit token limits)
     print("\n--- MODE 2: CHUNKING DISABLED (Conservative, Cheaper) ---\n")
@@ -1421,11 +1522,11 @@ if __name__ == "__main__":
         api_key=api_key,
         verbose=True,
         model="sonar",
+        token_chunk=16384,  # Large token limit to attempt single call
         temperature=0.2,
-        max_tokens=4096,
         max_retries=3,
         max_concurrent=3,
-        token_limit=4096,
+        token_limit=16384,
         enable_chunking=False,  # Chunking OFF
     )
 
@@ -1433,26 +1534,31 @@ if __name__ == "__main__":
     print("Results without Chunking")
     print("=" * 80)
     print(
-        f"Mode: {results_no_chunk.get('mode')} | Chunks: {results_no_chunk.get('chunk_count')} "
-        f"| Successful: {results_no_chunk.get('successful_chunks')}"
+        f"Mode: {results_no_chunk.get('mode')} | "
+        f"Chunks: {results_no_chunk.get('chunk_count')} | "
+        f"Successful: {results_no_chunk.get('successful_chunks')}"
     )
     print(
         f"Confirmed: {len(results_no_chunk.get('confirmed', []))} | "
-        f"Rejected: {len(results_no_chunk.get('rejected', []))}"
+        f"Uncertain: {len(results_no_chunk.get('uncertain', []))} | "
+        f"Rejected: {len(results_no_chunk.get('rejected', []))} | "
+        f"Not assessed: {len(results_no_chunk.get('not_assessed', []))}"
     )
+    print("Notes:")
+    print(f"  {results_no_chunk.get('notes', '').strip()}\n")
+
+    print_confidence_block(results_no_chunk.get("confidence", {}))
     print()
+
     elapsed2 = time.time() - start_time2
-    print(results_no_chunk)
-    print()
+
     print("\n" + "=" * 80)
     print("Comparison")
-    print("=" * 80)
     print("Chunking ENABLED:")
     print(f"  - API calls: {results_chunked.get('chunk_count')} (potentially parallel)")
-    print(f"  - Processing time: {elapsed1}")
-    print(f"  - Cost: Higher (~{results_chunked.get('chunk_count')} API calls)")
+    print(f"  - Processing time: {elapsed1:.2f} s")
+
     print()
     print("Chunking DISABLED:")
     print(f"  - API calls: {results_no_chunk.get('chunk_count')} (single call)")
-    print(f"  - Processing time: {elapsed2}")
-    print(f"  - Cost: Lower (1 API call)")
+    print(f"  - Processing time: {elapsed2:.2f} s")

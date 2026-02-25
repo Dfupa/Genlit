@@ -118,21 +118,6 @@ def load_hgnc_database(
     return hgnc_dict
 
 
-def build_basic_synonym_dict() -> dict:
-    """Fallback: Basic common gene synonyms (if download fails)"""
-    basic_dict = {
-        "IL8": {"approved_symbol": "IL8", "all_symbols": ["IL8", "IL-8", "CXCL8"]},
-        "IL-8": {"approved_symbol": "IL8", "all_symbols": ["IL8", "IL-8", "CXCL8"]},
-        "CXCL8": {"approved_symbol": "IL8", "all_symbols": ["IL8", "IL-8", "CXCL8"]},
-        "TNF": {"approved_symbol": "TNF", "all_symbols": ["TNF", "TNF-ALPHA"]},
-        "TNF-ALPHA": {
-            "approved_symbol": "TNF",
-            "all_symbols": ["TNF", "TNF-ALPHA"],
-        },
-    }
-    return basic_dict
-
-
 def normalize_gene_name(gene_name: str, hgnc_dict: dict) -> str | None:
     """
     Normalize gene name using HGNC database.
@@ -203,7 +188,7 @@ def classify_and_filter_genes(gene_name: str, hgnc_dict: dict) -> tuple:
     if gene_name.endswith("-") or gene_name.startswith("-"):
         return False, None, "TRUNCATED", f"Truncated gene name: {gene_name}"
 
-    if gene_name in ["HLA", "IL", "TNF", "MHC"]:  # Common truncations
+    if gene_name in ["HLA", "IL", "MHC", "BRCA"]:  # Common truncations in immunology
         return False, None, "TRUNCATED", f"Incomplete gene: {gene_name}"
 
     # Classify by pattern
@@ -300,9 +285,9 @@ def deduplicate_search_results(
         f"Deduplicating search results: {len(genes_list)} genes, {len(variants_list)} variants"
     )
 
-    # =========================================================================
+    # ===================
     # PROCESS GENES
-    # =========================================================================
+    # ===================
 
     genes_verified = []
     genes_unmapped = []
@@ -336,9 +321,9 @@ def deduplicate_search_results(
         f"Genes verified: {len(verified_canonicals)} canonical (from {len(unique_genes)} unique)"
     )
 
-    # =========================================================================
+    # ====================
     # PROCESS VARIANTS
-    # =========================================================================
+    # ====================
 
     variants_with_genes_verified = []
     variants_invalid = []
@@ -420,7 +405,7 @@ def deduplicate_search_results(
 
 
 # ============================================================================
-# MAIN WRAPPER FUNCTION - SINGLE ENTRY POINT FOR GENLIT
+# MAIN WRAPPER FUNCTION
 # ============================================================================
 
 

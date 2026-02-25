@@ -97,6 +97,56 @@ def clinvar_fetch_full(ids: list[str]) -> ET.Element | None:
 
 
 # --------------------------------------
+# Helper: Map review status to star rating
+# --------------------------------------
+
+
+def review_status_to_stars(review_status: str | None) -> int:
+    """
+    Map ClinVar textual review_status to a 0–4 star scale.
+
+    4: practice guideline
+    3: reviewed by expert panel
+    2: criteria provided, multiple submitters (± 'no conflicts')
+    1: criteria provided, single submitter or conflicting classifications
+    0: no assertion criteria / no classification / not classified individually / unknown
+    """
+    if not review_status:
+        return 0
+
+    rs = review_status.strip().lower()
+
+    # 4 stars
+    if "practice guideline" in rs:
+        return 4
+
+    # 3 stars
+    if "reviewed by expert panel" in rs:
+        return 3
+
+    # 2 stars – germline: "multiple submitters, no conflicts" | somatic:  "multiple submitters"
+    if "criteria provided" in rs and "multiple submitters" in rs:
+        return 2
+
+    # 1 star – single submitter OR conflicting classifications
+    if "criteria provided" in rs and (
+        "single submitter" in rs or "conflicting classifications" in rs
+    ):
+        return 1
+
+    # 0 stars – various "no criteria / no classification" cases
+    if (
+        "no assertion criteria provided" in rs
+        or "no classification provided" in rs
+        or "no classification for the individual variant" in rs
+    ):
+        return 0
+
+    # Fallback: treat unrecognized strings as 0-star
+    return 0
+
+
+# --------------------------------------
 # Helper: Extract useful info from summary dicts
 # --------------------------------------
 
@@ -289,6 +339,8 @@ def flatten_clinvar_summary(clean: dict) -> pd.DataFrame:
         "scv": join_list(clean.get("scv")),
         "rcv": join_list(clean.get("rcv")),
     }
+
+    flat["review_status_stars"] = review_status_to_stars(flat["review_status"])
 
     return pd.DataFrame([flat])
 
