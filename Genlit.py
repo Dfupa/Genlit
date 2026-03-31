@@ -470,7 +470,7 @@ def run_search(
 def output_results(
     disease: str,
     pipeline_results: dict,
-    perplexity_verdict: dict = None,
+    ai_verdict: dict = None,
     output_file: str = None,
     verbose: bool = False,
 ) -> None:
@@ -480,7 +480,7 @@ def output_results(
     Args:
         disease: The disease term searched
         pipeline_results: Dictionary from run_search()
-        perplexity_verdict: Dictionary from perplexity_API_search()
+        ai_verdict: Dictionary from AI provider cross-validation search
         output_file: Output filepath (auto-detects .csv or .txt)
         verbose: Print to console if True
     """
@@ -508,11 +508,11 @@ def output_results(
             return match.group(1)
         return variant_str  # rsID or other format
 
-    # Helper to get perplexity confidence/rationale for an entity
-    def get_perplexity_confidence(
+    # Helper to get AI confidence/rationale for an entity
+    def get_ai_confidence(
         entity_name: str, is_variant: bool = False
     ) -> tuple[str, str]:
-        """Get confidence score and rationale for entity from perplexity_verdict.
+        """Get confidence score and rationale for entity from ai_verdict.
         For variants, tries to extract gene name first for lookup in confidence dict.
         Args:
             entity_name: Gene name or variant string
@@ -520,7 +520,7 @@ def output_results(
         Returns:
             Tuple[str, str] or ("", "") if not found.
         """
-        if not perplexity_verdict or "confidence" not in perplexity_verdict:
+        if not ai_verdict or "confidence" not in ai_verdict:
             return "", ""
 
         # For variants, try gene name first (as status does)
@@ -528,7 +528,7 @@ def output_results(
             extract_gene_from_variant(entity_name) if is_variant else entity_name
         )
 
-        conf_str = perplexity_verdict["confidence"].get(lookup_name, "")
+        conf_str = ai_verdict["confidence"].get(lookup_name, "")
         if conf_str:
             # Split "0.95 | Multiple ClinVar assertions"
             parts = conf_str.split(" | ", 1)
@@ -537,16 +537,16 @@ def output_results(
             return score, rationale
         return "", ""
 
-    # 1) Genes section - WITH Perplexity
-    if perplexity_verdict and "error" not in perplexity_verdict:
-        # Extract gene lists from Perplexity verdict for quick lookup
-        confirmed_genes = set(perplexity_verdict.get("confirmed", []))
-        uncertain_genes = set(perplexity_verdict.get("uncertain", []))
-        rejected_genes = set(perplexity_verdict.get("rejected", []))
+    # 1) Genes section - WITH AI verdict
+    if ai_verdict and "error" not in ai_verdict:
+        # Extract gene lists from AI verdict for quick lookup
+        ai_confirmed_genes = set(ai_verdict.get("confirmed", []))
+        ai_uncertain_genes = set(ai_verdict.get("uncertain", []))
+        ai_rejected_genes = set(ai_verdict.get("rejected", []))
 
-        def get_perplexity_status(entity_name: str, is_variant: bool = False) -> str:
+        def get_ai_status(entity_name: str, is_variant: bool = False) -> str:
             """
-            Determine Perplexity status for an entity (gene or variant).
+            Determine AI status for an entity (gene or variant).
 
             Args:
                 entity_name: Gene name or variant string
@@ -558,18 +558,18 @@ def output_results(
             lookup_name = (
                 extract_gene_from_variant(entity_name) if is_variant else entity_name
             )
-            if lookup_name in confirmed_genes:
+            if lookup_name in ai_confirmed_genes:
                 return "Confirmed"
-            elif lookup_name in uncertain_genes:
+            elif lookup_name in ai_uncertain_genes:
                 return "Uncertain"
-            elif lookup_name in rejected_genes:
+            elif lookup_name in ai_rejected_genes:
                 return "Rejected"
             else:
                 return "Not assessed"
 
         for gene in pipeline_results.get("genes_in_both_abstract_clinvar", []):
-            status = get_perplexity_status(gene, is_variant=False)
-            conf_score, conf_rationale = get_perplexity_confidence(
+            status = get_ai_status(gene, is_variant=False)
+            conf_score, conf_rationale = get_ai_confidence(
                 gene, is_variant=False
             )
             rows.append(
@@ -578,9 +578,9 @@ def output_results(
                     "Entity Name": gene,
                     "Associated Gene": "",
                     "Source": "Both",
-                    "Perplexity Status": status,
-                    "Perplexity Confidence": conf_score,
-                    "Perplexity Rationale": conf_rationale,
+                    "AI Status": status,
+                    "AI Confidence": conf_score,
+                    "AI Rationale": conf_rationale,
                     "Notes": "Found in literature (PubMed|PMC) + ClinVar",
                 }
             )
@@ -604,8 +604,8 @@ def output_results(
             ),
         ]:
             for gene in gene_list:
-                status = get_perplexity_status(gene, is_variant=False)
-                conf_score, conf_rationale = get_perplexity_confidence(
+                status = get_ai_status(gene, is_variant=False)
+                conf_score, conf_rationale = get_ai_confidence(
                     gene, is_variant=False
                 )
                 rows.append(
@@ -614,9 +614,9 @@ def output_results(
                         "Entity Name": gene,
                         "Associated Gene": "",
                         "Source": source,
-                        "Perplexity Status": status,
-                        "Perplexity Confidence": conf_score,
-                        "Perplexity Rationale": conf_rationale,
+                        "AI Status": status,
+                        "AI Confidence": conf_score,
+                        "AI Rationale": conf_rationale,
                         "Notes": note,
                     }
                 )
@@ -647,8 +647,8 @@ def output_results(
             for variant in variant_list:
                 variant_str = str(variant)
                 gene_from_variant = extract_gene_from_variant(variant_str)
-                status = get_perplexity_status(variant_str, is_variant=True)
-                conf_score, conf_rationale = get_perplexity_confidence(
+                status = get_ai_status(variant_str, is_variant=True)
+                conf_score, conf_rationale = get_ai_confidence(
                     variant_str, is_variant=True
                 )
                 rows.append(
@@ -657,15 +657,15 @@ def output_results(
                         "Entity Name": variant_str,
                         "Associated Gene": gene_from_variant,
                         "Source": source,
-                        "Perplexity Status": status,
-                        "Perplexity Confidence": conf_score,
-                        "Perplexity Rationale": conf_rationale,
+                        "AI Status": status,
+                        "AI Confidence": conf_score,
+                        "AI Rationale": conf_rationale,
                         "Notes": note,
                     }
                 )
 
     else:
-        # Fallback WITHOUT Perplexity mode activated
+        # Fallback WITHOUT AI cross-check mode activated
         for gene_list, source, note in [
             (
                 pipeline_results.get("genes_in_both_abstract_clinvar", []),
@@ -764,11 +764,11 @@ def output_results(
                 f"Results saved to TSV: {output_file} (tab-separated, CSV compatible)"
             )
 
-            # Append perplexity verdict if present
-            if perplexity_verdict:
+            # Append AI verdict if present
+            if ai_verdict:
                 with open(output_file, "a", encoding="utf-8") as f:
-                    f.write(f"\n{'='*80}\nPerplexity verdict:\n")
-                    f.write(json_lib.dumps(perplexity_verdict, indent=2) + "\n")
+                    f.write(f"\n{'='*80}\nAI verdict:\n")
+                    f.write(json_lib.dumps(ai_verdict, indent=2) + "\n")
 
                 logger.info(
                     f"Results saved to TSV: {output_file} (tab-separated, CSV compatible)"
@@ -780,15 +780,15 @@ def output_results(
         logger.info(df.to_string(index=False))
         logger.info(f"{'='*80}")
         logger.info(f"Total entities: {len(df)}")
-        if perplexity_verdict and "error" not in perplexity_verdict:
+        if ai_verdict and "error" not in ai_verdict:
             logger.debug(
-                f"Perplexity Verdict:\n{json_lib.dumps(perplexity_verdict, indent=2)}"
+                f"AI Verdict:\n{json_lib.dumps(ai_verdict, indent=2)}"
             )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="GeneLit: Extract genes and variants for a disease from literature (Pubmed/PMC) and ClinVar, using NLP from Flair with a BioNER model to extract the entities, with optional Perplexity cross-check.",
+        description="GeneLit: Extract genes and variants for a disease from literature (Pubmed/PMC) and ClinVar, using NLP from Flair with a BioNER model to extract the entities, with optional AI cross-check.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Author:
@@ -801,35 +801,44 @@ python Genlit.py -q "Disease Name" -e "youremail@gmail.com" [options]
 
 EXAMPLES:
 
-# Basic run (PubMed/PMC + ClinVar, no Perplexity)
+# Basic run (PubMed/PMC + ClinVar, no AI cross-check)
 python Genlit.py -q "Hidradenitis Suppurativa" -e "youremail@gmail.com"
 
 # With Perplexity cross-check and verbose output to CSV
-python Genlit.py -q "Type 2 Diabetes" -e "youremail@gmail.com" --perplexity --verbose -o diabetes_results.csv
+python Genlit.py -q "Type 2 Diabetes" -e "youremail@gmail.com" --ai-provider perplexity --verbose -o diabetes_results.csv
 
 # With custom clinical relevance filtering and output to TXT
 python Genlit.py -q "Crohn's Disease" -e "youremail@gmail.com" --clinical-relevance "Pathogenic" "Likely pathogenic" "Uncertain significance" -o crohns_results.txt
 
 # With Perplexity temperature and tokens customized
-python Genlit.py -q "Rheumatoid Arthritis" -e "youremail@gmail.com" --perplexity --temperature 0.3 --max-tokens 1024 -o ra_results.csv
+python Genlit.py -q "Rheumatoid Arthritis" -e "youremail@gmail.com" --ai-provider perplexity --temperature 0.3 --max-tokens 1024 -o ra_results.csv
 
 # With custom .env file path and a retrieval max of 50 articles
-python Genlit.py -q "Type 1 Diabetes" -e "youremail@gmail.com" --perplexity --env-path /path/to/custom/.env --retmax 50 -o t1d_results.csv
+python Genlit.py -q "Type 1 Diabetes" -e "youremail@gmail.com" --ai-provider perplexity --env-path /path/to/custom/.env --retmax 50 -o t1d_results.csv
 
 # High determinism (low temperature)
-python Genlit.py -q "Celiac Disease" -e "youremail@gmail.com" --perplexity --temperature 0.0 -o celiac_results.csv
+python Genlit.py -q "Celiac Disease" -e "youremail@gmail.com" --ai-provider perplexity --temperature 0.0 -o celiac_results.csv
 
-# Custom model selection
-python Genlit.py -q "Lupus" -e "youremail@gmail.com" --perplexity --model sonar -o lupus_results.csv
+# With OpenAI cross-check
+python Genlit.py -q "Type 2 Diabetes" -e "youremail@gmail.com" --ai-provider openai --model gpt-4o-mini -o diabetes_results.csv
+
+# With Gemini cross-check
+python Genlit.py -q "Breast Cancer" -e "youremail@gmail.com" --ai-provider gemini --model gemini-1.5-flash -o breast_results.csv
+
+# With Claude cross-check
+python Genlit.py -q "Lupus" -e "youremail@gmail.com" --ai-provider claude --model claude-sonnet-4-5 -o lupus_results.csv
+
+# With Perplexity
+python Genlit.py -q "Pancreatic Cancer" -e "youremail@gmail.com" --ai-provider perplexity --model sonar-pro -o pancreas_results.csv
 
 # With chunking control (cost-conscious mode)
-python Genlit.py -q "Pancreatic Cancer" -e "youremail@gmail.com" --perplexity --enable-chunking False -o pancreas_cheap.csv
+python Genlit.py -q "Pancreatic Cancer" -e "youremail@gmail.com" --ai-provider perplexity --enable-chunking False -o pancreas_cheap.csv
 
 # With custom concurrent API calls (faster processing)
-python Genlit.py -q "Breast Cancer" -e "youremail@gmail.com" --perplexity --max-concurrent 5 -o breast_fast.csv
+python Genlit.py -q "Breast Cancer" -e "youremail@gmail.com" --ai-provider openai --max-concurrent 5 -o breast_fast.csv
 
 # With custom max retries for rate limit handling
-python Genlit.py -q "Lung Cancer" -e "youremail@gmail.com" --perplexity --max-retries 5 -o lung_robust.csv
+python Genlit.py -q "Lung Cancer" -e "youremail@gmail.com" --ai-provider gemini --max-retries 5 -o lung_robust.csv
 
 # Display help
 python Genlit.py -h
@@ -871,17 +880,24 @@ python Genlit.py --help
     )
 
     parser.add_argument(
-        "-p",
-        "--perplexity",
-        action="store_true",
-        help="(Optional) Enable Perplexity API cross-check (requires PERPLEXITY_API_KEY stated as such in a .env)",
+        "--ai-provider",
+        type=str,
+        choices=["perplexity", "openai", "gemini", "claude"],
+        default=None,
+        help="""(Optional) AI provider to use for cross-validation of gene/variant-disease associations.
+If not specified, no AI cross-check is performed.
+- perplexity: Uses Perplexity Sonar API (requires PERPLEXITY_API_KEY in .env)
+- openai: Uses OpenAI Chat Completions API (requires OPENAI_API_KEY in .env)
+- gemini: Uses Google Gemini API (requires GEMINI_API_KEY in .env)
+- claude: Uses Anthropic Claude API (requires ANTHROPIC_API_KEY in .env)
+Example: --ai-provider openai""",
     )
 
     parser.add_argument(
         "--temperature",
         type=float,
         default=0.2,
-        help="""Temperature for Perplexity.
+        help="""Temperature for AI provider.
 Range: 0.0 (deterministic) to 1.0 (creative).
 Default: 0.2 (recommended for genetics curation)
 A temperature above 0.5 will yield more creative but less reliable answers, and will be flagged""",
@@ -890,18 +906,20 @@ A temperature above 0.5 will yield more creative but less reliable answers, and 
     parser.add_argument(
         "--model",
         type=str,
-        choices=["sonar", "sonar-pro"],
-        default="sonar-pro",
-        help="""Perplexity model to use (control mode only).
-- sonar: Faster, cheaper
-- sonar-pro: Better reasoning (default)""",
+        default=None,
+        help="""Model name to use for the selected AI provider. If not specified, uses the default for each provider.
+Perplexity defaults: sonar-pro. Options: sonar, sonar-pro
+OpenAI defaults: gpt-4o. Options: gpt-4o, gpt-4o-mini, gpt-4-turbo
+Gemini defaults: gemini-1.5-pro. Options: gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash
+Claude defaults: claude-opus-4-5. Options: claude-opus-4-5, claude-sonnet-4-5, claude-haiku-3-5
+Example: --model gpt-4o-mini""",
     )
 
     parser.add_argument(
         "--env-path",
         type=str,
         default=None,
-        help="""Custom path to .env file containing PERPLEXITY_API_KEY.
+        help="""Custom path to .env file containing the API key for the selected provider.
 If not specified, looks for .env in current directory.
 Example: /path/to/custom/.env or /home/user/configs/.env.prod""",
     )
@@ -1017,8 +1035,8 @@ Example: --token-limit 6000""",
                 f"Valid options are: {', '.join(valid_levels)}"
             )
 
-    # Validate Perplexity control mode parameters
-    if args.perplexity and args.temperature > 0.5:
+    # Validate AI provider parameters
+    if args.ai_provider and args.temperature > 0.5:
         logger.warning(
             "High temperature (>0.5) may produce inconsistent gene categorizations. "
             "Recommend using 0.0-0.3 for genetics curation."
@@ -1049,9 +1067,9 @@ Example: --token-limit 6000""",
     logger.info(f"NCBI Email: {args.email}")
     logger.info(f"Output file: {args.output if args.output else 'STDOUT'}")
 
-    if args.perplexity:
-        logger.info("Perplexity cross-check: ENABLED")
-        logger.info(f"  - Model: {args.model}")
+    if args.ai_provider:
+        logger.info(f"AI cross-check: ENABLED (provider: {args.ai_provider})")
+        logger.info(f"  - Model: {args.model if args.model else 'default for provider'}")
         logger.info(f"  - Temperature: {args.temperature}")
         logger.info(f"  - Token limit: {args.token_limit}")
         logger.info(f"  - Enable chunking: {args.enable_chunking}")
@@ -1059,11 +1077,9 @@ Example: --token-limit 6000""",
             logger.info(f"  - Max concurrent API calls: {args.max_concurrent}")
             logger.info(f"  - Max retries per chunk: {args.max_retries}")
             logger.info(f"  - Max tokens per chunk: {args.max_tokens}")
-        logger.info(
-            f"  - Env file: {args.env_path if args.env_path else 'Default (.env)'}"
-        )
+        logger.info(f"  - Env file: {args.env_path if args.env_path else 'Default (.env)'}")
     else:
-        logger.info("Perplexity cross-check: DISABLED")
+        logger.info("AI cross-check: DISABLED")
 
     logger.info("=" * 80)
 
@@ -1077,52 +1093,65 @@ Example: --token-limit 6000""",
         min_review_stars=args.min_review_stars,
     )
 
-    # ===== OPTIONAL PERPLEXITY CROSS-CHECK =====
-    perplexity_verdict = None
+    # ===== OPTIONAL AI CROSS-CHECK =====
+    ai_verdict = None
 
-    if args.perplexity:
-        logger.info("Running Perplexity cross-check validation...")
+    if args.ai_provider:
+        logger.info(f"Running {args.ai_provider} cross-check validation...")
 
-        # Load custom .env if provided
         if args.env_path:
             from dotenv import load_dotenv
-
-            load_dotenv(args.env_path)  # Load from custom path
+            load_dotenv(args.env_path)
             logger.info(f"Loaded custom .env from: {args.env_path}")
-
         else:
             from dotenv import load_dotenv
-
-            load_dotenv()  # Load from current directory .env
+            load_dotenv()
             logger.info("Loaded .env from current directory")
 
-        api_key = os.getenv("PERPLEXITY_API_KEY")
+        PROVIDER_DEFAULTS = {
+            "perplexity": {"key_env": "PERPLEXITY_API_KEY", "default_model": "sonar-pro"},
+            "openai": {"key_env": "OPENAI_API_KEY", "default_model": "gpt-4o"},
+            "gemini": {"key_env": "GEMINI_API_KEY", "default_model": "gemini-1.5-pro"},
+            "claude": {"key_env": "ANTHROPIC_API_KEY", "default_model": "claude-opus-4-5"},
+        }
+
+        provider_config = PROVIDER_DEFAULTS[args.ai_provider]
+        api_key = os.getenv(provider_config["key_env"])
 
         if not api_key:
-            logger.error("PERPLEXITY_API_KEY not found in environment")
+            logger.error(f"{provider_config['key_env']} not found in environment")
             exit(1)
 
-        # Import and call with NEW parameters
+        selected_model = args.model if args.model else provider_config["default_model"]
 
-        perplexity_verdict = perplexity_API_search(
+        common_kwargs = dict(
             query=args.query,
             candidates=hs_results,
             api_key=api_key,
             verbose=args.verbose,
             temperature=args.temperature,
             token_chunk=args.max_tokens,
-            model=args.model,
+            model=selected_model,
             max_retries=args.max_retries,
             max_concurrent=args.max_concurrent,
             token_limit=args.token_limit,
             enable_chunking=args.enable_chunking,
         )
 
+        if args.ai_provider == "perplexity":
+            ai_verdict = perplexity_API_search(**common_kwargs)
+        elif args.ai_provider == "openai":
+            ai_verdict = openai_API_search(**common_kwargs)
+        elif args.ai_provider == "gemini":
+            ai_verdict = gemini_API_search(**common_kwargs)
+        elif args.ai_provider == "claude":
+            ai_verdict = claude_API_search(**common_kwargs)
+
     # Output results
     output_results(
         disease=args.query,
         pipeline_results=hs_results,
-        perplexity_verdict=perplexity_verdict,
+        ai_verdict=ai_verdict,
         output_file=args.output,
         verbose=args.verbose,
     )
